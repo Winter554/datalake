@@ -2,7 +2,7 @@
 
 ## 架构逻辑视图
 
-![image-20260611093138636](D:\projects\repo\datalake\doc\design\index\img\image-20260611093138636.png)
+![image-20260611093138636](./img/image-20260611093138636.png)
 
 ## 元信息数据结构
 
