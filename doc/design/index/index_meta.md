@@ -110,3 +110,116 @@ class BTreeIndexDesc : IndexDescription {}
 | 8    | `load_indices_by_partition` | `size_t partition_id`                   | `std::future<std::vector<IndexMetadata>>`    | 按照索引查找所有索引                 |
 | 9    | `load_index_by_partition`   | `std::string name, size_t partition_id` | `std::future<std::optional<IndexMetadata>>`  | 查找指定分区下指定索引元信息         |
 
+`describe_indices`面向外部用户，`load_indices`针对索引内部的接口， 按名称聚合后的逻辑索引列表，每个名称只出现一次
+
+  - 内部流程：
+    a. 调用 load_indices() 拿到所有物理段
+    b. 按 IndexCriteria 过滤（如果提供）
+    c. 按 name 做 chunk_by 分组
+    d. 每组调用 IndexDescriptionImpl::try_new() 构建一个逻辑描述对象，校验一致性
+    e. 返回聚合后的结果
+  - 对外接口：这是给用户看的——Python 的 dataset.describe_indices() / list_indices() 底层就调用它
+  - 支持过滤：可以按字段名、索引类型等条件筛选（IndexCriteria）
+
+  `index_statistics`获取索引统计信息，具体统计信息涉及数据结构`IndexStatistic`
+
+# 索引元信息组织
+
+```json
+{
+    "statistics": [
+        {
+            "snapshot-id": 1001,
+            "statistics-path": "index_metadata.puffin",
+            "file-size-in-bytes": 1635,
+            "file-footer-size-in-bytes": 256,
+            "blob-metadata": [
+                {
+                    "type": "custom_index_metadata",
+                    "source-snapshot-id": 1001,
+                    "source-sequence-number": 1,
+                    "fields": [
+                        1
+                    ],
+                    "properties": {
+                        "index-id": "001",
+                        "index-name": "index_name_1",
+                        "index-type": "custom_btree_index",
+                        "index-version": "1",      // 默认1
+                        "dataset_version": xxx,  // 基于哪个版本数据创建索引
+                        "created_at": xxx,   // 创建时间
+                        // 这里properties的K V都是String，不太确定数组的形式是否可行
+                        // 如果不行需要考虑转成字符串, 或者通过读index_metadata.puffin来获取信息
+                        "detail": "",  // 索引详情，json字符串表明索引参数，压缩方式
+                        "segments": [
+                            {
+                                "snapshot-id": 1001,
+                                "file_path": "s3://xxx/snap-1001_index_001_1.puffin",
+                                "file_size": 5425245,
+                                "status": "active",
+                                "file-count": 1,
+                                "coverage-files": [
+                                    "s3://xxxx/part-00000.parquet",
+                                    "s3://xxxx/part-00001.parquet"
+                                ],
+                                "partition_id": 0
+                            }
+                        ]
+                    }
+                }
+            ]
+        }
+    ]
+}
+
+```
+
+
+
+
+
+
+
+
+
+# 工作内容
+
+读写manifest元数据 statisticscommitter
+
+读写index.puffin文件 puffinregistrystore
+
+给定parquet location+position读到数据（确定回表方式）
+
+给定snapshot读有哪些parquet文件，再从parquet文件读数据
+
+（涉及delete file 判断数据是否删除，怀疑在iceberg中delete file能力已经包装好了）
+
+
+
+
+
+
+
+1、`build_index_metadata_from_segments`
+
+输入：逻辑索引
+
+将逻辑索引转换成IndexMetadata，调用`write_statistic`，写元索引元信息，或者是构建索引的时候从iceberg中获取元信息填充IndexSegment，再转换为IndexMetadata
+
+2、`build_index_description_from_statistic`
+
+输入：IndexMetadata
+
+调用`read_statistic`读索引元信息，将IndexMetadata转换成逻辑索引IndexDescription返回给上层应用
+
+3、`load_indices()`
+
+输入：无
+
+输出：vec\<IndexMetadata\>
+
+获取所有索引IndexMetadata，并用于转换为逻辑索引返回给上层
+
+4、`describe_indices(criteria)`
+
+将IndexMetadata聚合成IndexDescription
